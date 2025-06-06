@@ -1,0 +1,17 @@
+{
+  "name": "Workvivo Chatbot webserver",
+  "version": "1.0.0",
+  "description": "Sample to programmatically create chatbot thread.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+} 
