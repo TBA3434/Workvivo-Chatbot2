@@ -29,10 +29,20 @@ require('dotenv').config({ path: path.join(__dirname, '.env') })
 const jwt = require("jsonwebtoken");
 const jwksClient = require("jwks-rsa");
 const axios = require('axios');
+const sqlite3 = require("sqlite3").verbose();
 
 // vars
 const port = process.env.PORT
 const other = `${__dirname}/log/other_data.log`
+
+//connect to SQLite DB
+const dbPath = path.join(__dirname, 'db', 'faq.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    return console.error('failed to connect to database', err.message);
+  }
+  console.log('connected to the FAQ Database;');
+})
 
 // middleware to parse JSON request bodies
 app.use(express.json());
