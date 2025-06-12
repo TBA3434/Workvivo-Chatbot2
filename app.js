@@ -49,36 +49,29 @@ app.use(express.urlencoded({ extended: true }));
 // add this line after the express middleware setup
 app.use(express.static('public'));
 
-// add this function before the app.post('/webhook') route
 // verify x-workvivo-jwt header for verifying the request’s authenticity. 
 async function verifyWorkvivoRequest(token) {
   const decodedToken = jwt.decode(token, { complete: true });
   const { kid } = decodedToken.header;
   const { publicKeyUrl } = decodedToken.payload;
-  // fetch the JWK
   const client = jwksClient({ jwksUri: publicKeyUrl });
   const key = await client.getSigningKey(kid);
   const signingKey = key.getPublicKey();
-  // verify the token
   return jwt.verify(token, signingKey);
 }
 
 // handling webhook post events
 async function handleWebhook(req, res) {
-  // log req datas
   console.log("request headers", req.headers);
-  const bodyString = JSON.stringify(req.body); // convert JSON to String
+  const bodyString = JSON.stringify(req.body);
   writedata(other, bodyString);
 
   try {
     const webhook = req.body;
 
     if (webhook.action === 'chat_bot_message_sent') {
-
-      // token verification
       try {
         const token = req.headers['x-workvivo-jwt'];
-        //console.log("token:", token);
         if (!token) {
           console.log("token error:", "Missing Workvivo jwt");
           return res.status(401).json({ error: 'Missing Workvivo jwt' });
@@ -89,11 +82,8 @@ async function handleWebhook(req, res) {
         console.error('Token verification failed:', error);
         return res.status(401).json({ error: 'Invalid signature' });
       }
-
       return res.status(200).json({ success: true });
-
     } else if (webhook.category === 'bot_message_notification') {
-      // define headers
       const baseRequestConfig = {
         method: 'post',
         url: process.env.WORKVIVOAPIURL,
@@ -103,7 +93,7 @@ async function handleWebhook(req, res) {
           'Content-Type': 'application/json'
         }
       };
-      // define data/payloads
+
       let requestPayload;
 
       switch (webhook.message?.text?.toLowerCase()) {
@@ -125,12 +115,13 @@ async function handleWebhook(req, res) {
             }]
           };
           break;
+
         case 'card2':
           requestPayload = {
-              bot_userid: webhook.bot.bot_userid,
-              channel_url: webhook.channel.channel_url,
-              type: 'card',
-              cards: [
+            bot_userid: webhook.bot.bot_userid,
+            channel_url: webhook.channel.channel_url,
+            type: 'card',
+            cards: [
               {
                 cardTitle: "Welcome to Chat Demo 1",
                 cardDescription: "demonstrating basics 1",
@@ -150,42 +141,31 @@ async function handleWebhook(req, res) {
                 buttons: [
                   { label: "IT Help Button 3-1", message: "IT Help 3-1" },
                   { label: "IT Help Button 3-2", message: "IT Help 3-2" },
-                  { label: "IT Help Button 3-3", message: "IT Help 3-3" },
+                  { label: "IT Help Button 3-3", message: "IT Help 3-3" }
                 ]
               }
             ]
           };
           break;
+
         case 'quick':
           requestPayload = {
             bot_userid: webhook.bot.bot_userid,
             channel_url: webhook.channel.channel_url,
             type: 'quick_reply',
-            "replies": [
-              {
-                "label": "Unable to connect to this network",
-                "message": "Unable to connect to this network"
-              },
-              {
-                "label": "Incorrect Password",
-                "message": "Incorrect Password"
-              },
-              {
-                "label": "No error message, just won’t connect",
-                "message": "No error message, just won’t connect"
-              },
-              {
-                "label": "Other",
-                "message": "Other"
-              }
+            replies: [
+              { label: "Unable to connect to this network", message: "Unable to connect to this network" },
+              { label: "Incorrect Password", message: "Incorrect Password" },
+              { label: "No error message, just won’t connect", message: "No error message, just won’t connect" },
+              { label: "Other", message: "Other" }
             ]
           };
           break;
 
         default:
           const userMessage = webhook.message.text;
-
           let answer = "Sorry, I don't know the answer to that.";
+
           try {
             const row = db.prepare("SELECT answer FROM faqs WHERE question = ?").get(userMessage);
             if (row) answer = row.answer;
@@ -212,15 +192,22 @@ async function handleWebhook(req, res) {
             console.error("Error sending bot reply:", error.response?.data || error.message);
             return res.status(500).json({ error: "Failed to send reply" });
           }
+      }
 
-        // end of default
-        break;
-      } // end of switch
-
-      // if no recognized message type matched
       console.log("No action defined from webhook");
       return res.status(200).json({ error: 'No action defined from webhook' });
-
+    }
+  } catch (error) {
+    console.error('Webhook handler error details:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : null,
+      requestPayload: error.config?.data ? JSON.stringify(JSON.parse(error.config.data), null, 2) : null,
+      url: error.config?.url
+    });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
 
 // post request, route all post request
 app.post('/webhook', handleWebhook);
@@ -238,7 +225,6 @@ app.listen(port, () => console.log(logCurrentDateTime(), `Zoom Workvivo Webhook.
 // write log
 async function writedata(datadir, newdata) {
   try {
-    //await fsPromises.writeFile(datafile, newdata)
     await fsPromises.appendFile(datadir, newdata + '\n');
     console.log(logCurrentDateTime(), 'log saved successfully.');
   } catch (err) {
@@ -251,4 +237,4 @@ function logCurrentDateTime() {
   const currentDate = new Date();
   let d = currentDate.toDateString() + " " + currentDate.toTimeString().split(' ')[0];
   return d;
-};
+}
