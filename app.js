@@ -185,13 +185,40 @@ async function handleWebhook(req, res) {
             ]
           };
           break;
+
         default:
-          requestPayload = {
-            bot_userid: webhook.bot.bot_userid,
-            channel_url: webhook.channel.channel_url,
-            type: 'message',
-            message: webhook.message.text
-          };
+          const userMessage = webhook.message.text;
+
+          db.get("SELECT answer FROM faqs WHERE question = ?", [userMessage], (err, row) =>{
+            if(err){
+              console.error("DB Error:", err.message);
+              return;
+            };
+
+            const answer = row ? row.answer: "Sorry, I don't know the answer to that.";
+
+            const dynamocPayload = {
+              bot_userid: webhook.bot.botuserid,
+              channel_url: webhook.channel.channel_url,
+              type: 'message',
+              message: answer
+            };
+
+            axios({
+              ...baseRequestConfig,
+              data: dynamicPayload
+            })
+            
+            .then(response =>{
+              console.log("Bot Reply sent:", response.data);
+          })
+
+          .catch(error => {
+            console.error("Error Sending bot reply:", error.response?.data || error.message);
+          });
+      
+        });
+
           break;
       }
 
