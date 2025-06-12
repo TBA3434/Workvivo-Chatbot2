@@ -192,55 +192,35 @@ async function handleWebhook(req, res) {
           } catch (err) {
             console.error("DB Error:", err.message);
           }
-            const dynamicPayload = {
-              bot_userid: webhook.bot.bot_userid,
-              channel_url: webhook.channel.channel_url,
-              type: 'message',
-              message: answer
-            };
 
-            axios({
+          const dynamicPayload = {
+            bot_userid: webhook.bot.bot_userid,
+            channel_url: webhook.channel.channel_url,
+            type: 'message',
+            message: answer
+          };
+
+          try {
+            const response = await axios({
               ...baseRequestConfig,
               data: dynamicPayload
-            })
-            
-            .then(response =>{
-              console.log("Bot Reply sent:", response.data);
-          })
+            });
 
-          .catch(error => {
-            console.error("Error Sending bot reply:", error.response?.data || error.message);
-          });
-      
-        });
+            console.log("Bot Reply sent:", response.data);
+            return res.status(200).json({ success: true });
+          } catch (error) {
+            console.error("Error sending bot reply:", error.response?.data || error.message);
+            return res.status(500).json({ error: "Failed to send reply" });
+          }
 
-          break;
-      }
+        // end of default
+        break;
+      } // end of switch
 
-      const response = await axios({
-        ...baseRequestConfig,
-        data: requestPayload
-      });
+      // if no recognized message type matched
+      console.log("No action defined from webhook");
+      return res.status(200).json({ error: 'No action defined from webhook' });
 
-      console.log('API Response:', JSON.stringify(response.data, null, 2));
-      return res.status(200).json({ success: true });
-    }
-
-    console.log("No action defined from webhook");
-    return res.status(200).json({ error: 'No action defined from webhook' });
-
-
-  } catch (error) {
-    console.error('Webhook handler error details:', {
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : null,
-      requestPayload: error.config?.data ? JSON.stringify(JSON.parse(error.config.data), null, 2) : null,
-      url: error.config?.url
-    });
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-}
 
 // post request, route all post request
 app.post('/webhook', handleWebhook);
@@ -271,4 +251,4 @@ function logCurrentDateTime() {
   const currentDate = new Date();
   let d = currentDate.toDateString() + " " + currentDate.toTimeString().split(' ')[0];
   return d;
-}
+};
