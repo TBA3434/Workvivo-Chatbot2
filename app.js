@@ -29,7 +29,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') })
 const jwt = require("jsonwebtoken");
 const jwksClient = require("jwks-rsa");
 const axios = require('axios');
-const sqlite3 = require("sqlite3").verbose();
+const Database = require('better-sqlite3');
 
 // vars
 const port = process.env.PORT
@@ -37,12 +37,8 @@ const other = `${__dirname}/log/other_data.log`
 
 //connect to SQLite DB
 const dbPath = path.join(__dirname, 'db', 'faq.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    return console.error('failed to connect to database', err.message);
-  }
-  console.log('connected to the FAQ Database;');
-})
+const db = new Database(dbPath);
+console.log('connected to the FAQ database using better-sqlite3')
 
 // middleware to parse JSON request bodies
 app.use(express.json());
@@ -189,16 +185,15 @@ async function handleWebhook(req, res) {
         default:
           const userMessage = webhook.message.text;
 
-          db.get("SELECT answer FROM faqs WHERE question = ?", [userMessage], (err, row) =>{
-            if(err){
-              console.error("DB Error:", err.message);
-              return;
-            };
-
-            const answer = row ? row.answer: "Sorry, I don't know the answer to that.";
-
-            const dynamocPayload = {
-              bot_userid: webhook.bot.botuserid,
+          let answer = "Sorry, I don't know the answer to that.";
+          try {
+            const row = db.prepare("SELECT answer FROM faqs WHERE question = ?").get(userMessage);
+            if (row) answer = row.answer;
+          } catch (err) {
+            console.error("DB Error:", err.message);
+          }
+            const dynamicPayload = {
+              bot_userid: webhook.bot.bot_userid,
               channel_url: webhook.channel.channel_url,
               type: 'message',
               message: answer
