@@ -7,25 +7,13 @@ const port = process.env.PORT || 3000;
 
 console.log("🟡 Starting chatbot server...");
 
-// Try to connect to SQLite DB
+// Connect to SQLite DB
 let db;
 try {
   const dbPath = path.join(__dirname, 'db', 'faq.db');
   console.log("📁 DB path:", dbPath);
   db = new Database(dbPath);
   console.log("✅ Connected to SQLite DB");
-
-  // Log all rows in the faqs table
-  try {
-    const rows = db.prepare("SELECT question, answer FROM faqs").all();
-    console.log("📋 FAQ DB Contents:");
-    rows.forEach(row => {
-      console.log(`Q: ${row.question} → A: ${row.answer}`);
-    });
-  } catch (queryErr) {
-    console.error("⚠️ Failed to query FAQ DB:", queryErr.message);
-  }
-
 } catch (err) {
   console.error("❌ Failed to connect to DB:", err.message);
   process.exit(1);
@@ -33,24 +21,33 @@ try {
 
 app.use(express.json());
 
-// Chat endpoint
-app.post('/chat', (req, res) => {
-  const userMessage = req.body.message?.toLowerCase();
+// This is the Workvivo webhook endpoint (your callback URL)
+app.post('/webhook', (req, res) => {
+  console.log("🟢 Received Workvivo message:", req.body);
+
+  // Extract user message text from Workvivo payload
+  const userMessage = req.body.message?.text?.toLowerCase();
 
   if (!userMessage) {
-    return res.status(400).json({ error: 'Missing message in request' });
+    return res.status(400).json({ error: 'No message text provided' });
   }
 
-  let response = "Sorry, I don't know how to respond to that.";
+  // Query your FAQ database for a matching answer
+  let answer = "Sorry, I don't know how to respond to that.";
 
   try {
     const row = db.prepare("SELECT answer FROM faqs WHERE LOWER(question) = LOWER(?)").get(userMessage);
-    if (row) response = row.answer;
+    if (row) answer = row.answer;
   } catch (err) {
     console.error("❌ DB error:", err.message);
   }
 
-  res.json({ response });
+  // Respond to Workvivo with JSON formatted reply
+  // This example sends a plain text message back to the user
+  res.json({
+    type: "message",
+    message: answer
+  });
 });
 
 // Test route
@@ -58,7 +55,6 @@ app.get('/', (req, res) => {
   res.send('Chatbot is running.');
 });
 
-// Start server
 app.listen(port, () => {
   console.log(`✅ Server listening on port ${port}`);
 });
