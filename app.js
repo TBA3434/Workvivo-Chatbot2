@@ -14,6 +14,18 @@ try {
   console.log("📁 DB path:", dbPath);
   db = new Database(dbPath);
   console.log("✅ Connected to SQLite DB");
+
+  // Log all rows in the faqs table
+  try {
+    const rows = db.prepare("SELECT question, answer FROM faqs").all();
+    console.log("📋 FAQ DB Contents:");
+    rows.forEach(row => {
+      console.log(`Q: ${row.question} → A: ${row.answer}`);
+    });
+  } catch (queryErr) {
+    console.error("⚠️ Failed to query FAQ DB:", queryErr.message);
+  }
+
 } catch (err) {
   console.error("❌ Failed to connect to DB:", err.message);
   process.exit(1);
