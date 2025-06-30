@@ -21,19 +21,18 @@ try {
 
 app.use(express.json());
 
-// This is the Workvivo webhook endpoint (your callback URL)
+// Workvivo webhook endpoint
 app.post('/webhook', (req, res) => {
-  console.log("🟢 Received Workvivo message:", req.body);
+  console.log("🟢 Received Workvivo message:");
+  console.log(JSON.stringify(req.body, null, 2));
 
-  // Extract user message text from Workvivo payload
-  const userMessage = req.body.message?.text?.toLowerCase();
+  const userMessage = req.body?.message?.message?.toLowerCase();
 
   if (!userMessage) {
-    return res.status(400).json({ error: 'No message text provided' });
+    return res.status(400).json({ error: 'No message provided in payload.' });
   }
 
-  // Query your FAQ database for a matching answer
-  let answer = "Sorry, I don't know how to respond to that.";
+  let answer = "Sorry, I couldn't find an answer for that.";
 
   try {
     const row = db.prepare("SELECT answer FROM faqs WHERE LOWER(question) = LOWER(?)").get(userMessage);
@@ -42,8 +41,6 @@ app.post('/webhook', (req, res) => {
     console.error("❌ DB error:", err.message);
   }
 
-  // Respond to Workvivo with JSON formatted reply
-  // This example sends a plain text message back to the user
   res.json({
     type: "message",
     message: answer
@@ -55,6 +52,7 @@ app.get('/', (req, res) => {
   res.send('Chatbot is running.');
 });
 
+// Start server
 app.listen(port, () => {
   console.log(`✅ Server listening on port ${port}`);
 });
