@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create ChatBot Channel and Send Text Message Sample</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .input-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .top-button {
+            margin-bottom: 10px;
+        }
+        textarea {
+            width: 100%;
+            height: 60px;
+            margin: 10px 0;
+            padding: 10px;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            min-height: 80px;
+            background-color: #f8f9fa;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .output-entry {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        .output-entry:last-child {
+            border-bottom: none;
+        }
+        .output-timestamp {
+            color: #666;
+            font-size: 0.8em;
+            margin-bottom: 5px;
+        }
+        .loading {
+            display: none;
+            margin-top: 10px;
+            color: #666;
+        }
+        .json-key {
+            color: #881391;
+        }
+        .json-string {
+            color: #22863a;
+        }
+        .json-number {
+            color: #005cc5;
+        }
+        .json-boolean {
+            color: #005cc5;
+        }
+        .json-null {
+            color: #6f42c1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <hr></hr>
+        <p>
+        <div class="input-group">
+            <label for="userId">User ID:</label>
+            <input type="text" id="userId" placeholder="Enter your user ID">
+        </div>
+        <div class="input-group">
+            <label for="botUserId">Bot User ID:</label>
+            <input type="text" id="botUserId" placeholder="Enter bot user ID">
+        </div>
+        <button class="top-button" onclick="topButtonClick()">Create Chat Channels</button>
+        
+        <div id="loading" class="loading">Loading...</div>
+        </p>
+        <hr></hr>
+        <p>
+        <div class="input-group">
+            <label for="channelUrl">Channel URL:</label>
+            <input type="text" id="channelUrl" placeholder="Enter channel URL">
+        </div>
+        <div class="input-group">
+            <label for="botUserId2">Bot User ID:</label>
+            <input type="text" id="botUserId2" placeholder="Enter bot user ID">
+        </div>
+
+        <textarea id="userText" placeholder="Enter your text here..."></textarea>
+        
+        <button onclick="submitText()">Send Text Message to Chat Channel</button>
+        </p>
+        <hr></hr>
+        <p>
+            <b>Logs:</b>
+            <div id="output"></div>
+        </p>
+    </div>
+
+    <script>
+        function getTimestamp() {
+            return new Date().toLocaleTimeString();
+        }
+
+        function appendOutput(content, isError = false) {
+            const output = document.getElementById("output");
+            const entry = document.createElement("div");
+            entry.className = "output-entry";
+            
+            const timestamp = document.createElement("div");
+            timestamp.className = "output-timestamp";
+            timestamp.textContent = getTimestamp();
+            
+            const contentDiv = document.createElement("div");
+            contentDiv.innerHTML = isError ? `<span class="json-string">Error: ${content}</span>` : syntaxHighlight(content);
+            
+            entry.appendChild(timestamp);
+            entry.appendChild(contentDiv);
+            output.appendChild(entry);
+            
+            // Scroll to the bottom
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function syntaxHighlight(json) {
+            if (typeof json !== 'string') {
+                json = JSON.stringify(json, null, 2);
+            }
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        async function topButtonClick() {
+            const userId = document.getElementById("userId").value;
+            const botUserId = document.getElementById("botUserId").value;
+            const loading = document.getElementById("loading");
+            const channelUrlInput = document.getElementById("channelUrl");
+            const botUserId2Input = document.getElementById("botUserId2");
+
+            try {
+                loading.style.display = "block";
+                appendOutput("Fetching channels...");
+
+                const response = await fetch('./api/channels', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        userId,
+                        botUserId
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                appendOutput(data);
+
+                // Check if data has the expected structure and populate the fields
+                if (data && data.data) {
+                    // Set channel URL directly from data.data
+                    if (data.data.channel_url) {
+                        channelUrlInput.value = data.data.channel_url;
+                    }
+                    
+                    // Set bot user ID from the first user in the users array
+                    if (data.data.users && data.data.users.length > 0) {
+                        const botUser = data.data.users.find(user => user.bot_userid);
+                        if (botUser) {
+                            botUserId2Input.value = botUser.bot_userid;
+                        }
+                    }
+                }
+            } catch (error) {
+                appendOutput(error.message, true);
+            } finally {
+                loading.style.display = "none";
+            }
+        }
+
+        async function submitText() {
+            const text = document.getElementById("userText").value;
+            const channelUrl = document.getElementById("channelUrl").value;
+            const botUserId2 = document.getElementById("botUserId2").value;
+            const loading = document.getElementById("loading");
+
+            if (!text || !channelUrl || !botUserId2) {
+                appendOutput("Please fill in all required fields", true);
+                return;
+            }
+
+            try {
+                loading.style.display = "block";
+                appendOutput("Sending message...");
+
+                const response = await fetch('./api/send-message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        bot_userid: botUserId2,
+                        channel_url: channelUrl,
+                        message: text
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                appendOutput(data);
+                
+                // Clear the textarea after successful send
+                document.getElementById("userText").value = "";
+            } catch (error) {
+                appendOutput(error.message, true);
+            } finally {
+                loading.style.display = "none";
+            }
+        }
+    </script>
+</body>
+</html> 
