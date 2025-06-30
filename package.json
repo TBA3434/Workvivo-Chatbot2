@@ -4,13 +4,14 @@
     "description": "Simplified Workvivo Chatbot",
     "main": "app.js",
     "scripts": {
-        "start": "node app.js"
+      "start": "node app.js",
+      "postinstall": "npm rebuild better-sqlite3"
     },
     "author": "",
     "license": "ISC",
     "dependencies": {
-        "better-sqlite3": "^11.10.0",
-        "express": "^4.21.2"
+      "better-sqlite3": "^11.10.0",
+      "express": "^4.21.2"
     },
     "keywords": []
-}
+  }
