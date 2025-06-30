@@ -44,7 +44,7 @@ app.post('/chat', (req, res) => {
   let response = "Sorry, I don't know how to respond to that.";
 
   try {
-    const row = db.prepare("SELECT answer FROM faqs WHERE LOWER(question) = ?").get(userMessage);
+    const row = db.prepare("SELECT answer FROM faqs WHERE LOWER(question) = LOWER(?)").get(userMessage);
     if (row) response = row.answer;
   } catch (err) {
     console.error("❌ DB error:", err.message);
