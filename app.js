@@ -1,12 +1,11 @@
 const express = require('express');
 const path = require('path');
 const Database = require('better-sqlite3');
-const axios = require('axios');
-require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 10000;
 
+// Start message
 console.log("🟡 Starting chatbot server...");
 
 // Connect to SQLite DB
@@ -21,60 +20,40 @@ try {
   process.exit(1);
 }
 
+// Middleware to parse JSON
 app.use(express.json());
 
-// Webhook endpoint to receive Workvivo messages
+// Webhook endpoint - this is your callback URL for Workvivo
 app.post('/webhook', async (req, res) => {
-  const webhook = req.body;
+  console.log("🟢 Incoming webhook payload:", JSON.stringify(req.body, null, 2));
 
-  // Validate expected structure
-  if (webhook.action !== 'message') {
-    return res.status(200).json({ message: 'Non-message action received.' });
-  }
+  const { action, message, bot, channel } = req.body;
 
-  const messageText = webhook.message?.message;
-  const channelUrl = webhook.message?.channel_url;
-  const botUserId = webhook.message?.bot_userid;
+  if (action === 'chat_bot_message_sent' && message?.text) {
+    const userMessage = message.text.toLowerCase();
+    let answer = "Sorry, I don't know how to respond to that.";
 
-  if (!messageText || !channelUrl || !botUserId) {
-    return res.status(400).json({ error: 'Missing required message fields.' });
-  }
+    try {
+      const row = db.prepare("SELECT answer FROM faqs WHERE LOWER(question) = LOWER(?)").get(userMessage);
+      if (row) answer = row.answer;
+    } catch (err) {
+      console.error("❌ DB error:", err.message);
+    }
 
-  // Look up FAQ response
-  let answer = "Sorry, I don't know how to respond to that.";
-  try {
-    const row = db.prepare("SELECT answer FROM faqs WHERE LOWER(question) = LOWER(?)").get(messageText.toLowerCase());
-    if (row) answer = row.answer;
-  } catch (err) {
-    console.error("❌ DB query failed:", err.message);
-  }
-
-  // Send response back to Workvivo
-  try {
-    const response = await axios.post(process.env.WORKVIVOAPIURL, {
-      bot_userid: botUserId,
-      channel_url: channelUrl,
+    return res.json({
+      bot_userid: bot.bot_userid,
+      channel_url: channel.channel_url,
       type: "message",
       message: answer
-    }, {
-      headers: {
-        "Authorization": `Bearer ${process.env.API_TOKEN}`,
-        "Workvivo-Id": process.env.WORKVIVO_ID,
-        "Content-Type": "application/json"
-      }
     });
-
-    console.log("✅ Sent reply to Workvivo:", response.data);
-    return res.status(200).json({ success: true });
-  } catch (err) {
-    console.error("❌ Error replying to Workvivo:", err.message);
-    return res.status(500).json({ error: 'Failed to send reply.' });
   }
+
+  return res.status(200).json({ message: "Non-message action received." });
 });
 
-// Simple test route
+// Health check endpoint
 app.get('/', (req, res) => {
-  res.send('Chatbot is running.');
+  res.send('✅ Chatbot server is running.');
 });
 
 app.listen(port, () => {
