@@ -70,10 +70,14 @@ app.post('/webhook', async (req, res) => {
   const token = req.headers['x-workvivo-jwt'];
 
   // — Dummy-token bypass (for local curl tests)
+  let skipJwt = false;
   if (token === 'dummy-token') {
     console.log('⚠️ Skipping JWT verification (dummy-token)');
-  } else {
-    // — Real JWT verification
+    skipJwt = true;
+  }
+
+  // — Real JWT verification if not bypassing
+  if (!skipJwt) {
     if (!token) {
       console.error('❌ Missing JWT');
       return res.status(401).json({ error: 'Missing JWT' });
@@ -113,6 +117,12 @@ app.post('/webhook', async (req, res) => {
     type: 'message',
     message: answer
   };
+
+  // — If dummy-token, return payload directly
+  if (skipJwt) {
+    console.log('⚡ Responding directly (dummy-token)');
+    return res.json(responsePayload);
+  }
 
   // — Send it back via Workvivo API
   try {
