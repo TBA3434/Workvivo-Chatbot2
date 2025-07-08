@@ -78,6 +78,12 @@ app.post('/webhook', async (req, res) => {
     return res.status(401).json({ error: 'Invalid JWT' });
   }
 
+  if (req.headers['x-workvivo-jwt'] === 'dummy-token') {
+    console.log('⚠️ Skipping JWT for local test');
+  } else {
+    // normal verifyWorkvivoRequest(token) logic
+  }
+
   // — Extract and validate payload
   const { action, category, message, bot, channel } = req.body;
   if (action !== 'chat_bot_message_sent' || category !== 'bot_message_notification') {
