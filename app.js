@@ -1,101 +1,113 @@
-const path        = require('path');
-const express     = require('express');
-const jwt         = require('jsonwebtoken');
-const jwksClient  = require('jwks-rsa');
-const axios       = require('axios');
-const Database    = require('better-sqlite3');
-
-// load .env
+// app.js
+const fs       = require('fs');
+const path     = require('path');
+const express  = require('express');
+const jwt      = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
+const axios    = require('axios');
+const Database = require('better-sqlite3');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-// env vars
-const PORT             = process.env.PORT           || 10000;
+//
+// Environment variables
+//
+const PORT             = process.env.PORT || 10000;
 const WORKVIVO_API_URL = process.env.WORKVIVO_API_URL;
 const WORKVIVO_ID      = process.env.WORKVIVO_ID;
 const WORKVIVO_TOKEN   = process.env.WORKVIVO_TOKEN;
-const QA_DB_PATH       = process.env.QA_DB_PATH     || path.join(__dirname, 'db', 'faq.db');
+const QA_DB_PATH       = process.env.QA_DB_PATH || path.join(__dirname, 'db', 'faq.db');
 
-// open your QA database
+//
+// Open your SQLite FAQ database (readonly)
+//
 const db = new Database(QA_DB_PATH, { readonly: true });
 
+//
+// Express setup
+//
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// verify the incoming Workvivo webhook JWT
+//
+// Helper: verify real JWTs, but allow dummy-token for testing
+//
 async function verifyWorkvivoRequest(token) {
+  if (token === 'dummy-token') {
+    console.log('⚠️  Skipping JWT verification for dummy-token');
+    return true;
+  }
   const decoded = jwt.decode(token, { complete: true });
   if (!decoded) throw new Error('Invalid token format');
   const { kid } = decoded.header;
   const { publicKeyUrl } = decoded.payload;
   const client = jwksClient({ jwksUri: publicKeyUrl });
-  const key    = await client.getSigningKey(kid);
-  const pubKey = key.getPublicKey();
-  return jwt.verify(token, pubKey);
+  const key = await client.getSigningKey(kid);
+  const publicKey = key.getPublicKey();
+  return jwt.verify(token, publicKey);
 }
 
+//
+// Webhook endpoint
+//
 app.post('/webhook', async (req, res) => {
-  console.log('🚨 /webhook called', req.headers, req.body);
+  console.log('🚨  /webhook called', req.headers, req.body);
+  const token   = req.headers['x-workvivo-jwt'];
+  const hook    = req.body;
 
-  const token = req.headers['x-workvivo-jwt'];
-  if (!token) return res.status(401).json({ error: 'Missing Workvivo JWT' });
-
+  if (!token) {
+    return res.status(401).json({ error: 'Missing Workvivo JWT' });
+  }
   try {
     await verifyWorkvivoRequest(token);
-  } catch (e) {
-    console.error('❌ JWT verification failed', e);
+  } catch (err) {
+    console.error('❌ JWT verification failed', err);
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
-  const { action, category, bot, channel, message } = req.body;
+  if (hook.action === 'chat_bot_message_sent' && hook.category === 'bot_message_notification') {
+    const userQ = hook.message?.text?.trim().toLowerCase() || '';
+    // try to find a matching FAQ (simple LIKE match)
+    let answer = "Sorry, I don't know that one yet.";
+    const row = db.prepare('SELECT answer FROM faq WHERE question LIKE ? LIMIT 1')
+                  .get(`%${userQ}%`);
+    if (row) answer = row.answer;
 
-  // only respond to user messages
-  if (action === 'chat_bot_message_sent' && category === 'bot_message_notification') {
-    const userText = (message.text || '').trim().toLowerCase();
-
-    // simple LIKE match against your sqlite FAQ table
-    const stmt = db.prepare(`
-      SELECT answer
-      FROM faq
-      WHERE lower(question) LIKE ?
-      LIMIT 1
-    `);
-    const row = stmt.get(`%${userText}%`);
-    const answer = row
-      ? row.answer
-      : "Sorry, I don't have an answer for that yet.";
-
-    // build your reply payload (message must be a string)
+    // build the reply payload
     const payload = {
-      bot_userid:  bot.bot_userid,
-      channel_url: channel.channel_url,
-      type:       'message',
-      message:    answer
+      bot_userid:   hook.bot.bot_userid,
+      channel_url:  hook.channel.channel_url,
+      type:         'message',
+      message:      answer
     };
 
     try {
-      const resp = await axios.post(
-        WORKVIVO_API_URL,
-        payload,
-        {
-          headers: {
-            'Workvivo-Id': WORKVIVO_ID,
-            'Authorization': `Bearer ${WORKVIVO_TOKEN}`,
-            'Content-Type': 'application/json'
-          }
+      await axios.post(WORKVIVO_API_URL, payload, {
+        headers: {
+          'Workvivo-Id':   WORKVIVO_ID,
+          'Authorization': `Bearer ${WORKVIVO_TOKEN}`,
+          'Content-Type':  'application/json'
         }
-      );
-      console.log('✅ Workvivo reply sent', resp.data);
-      return res.status(200).json({ success: true });
+      });
+      console.log('✅ Reply sent:', answer);
+      return res.sendStatus(200);
     } catch (err) {
-      console.error('❌ Workvivo API error', err.response?.data || err);
-      return res.status(500).json({ error: 'Failed to post reply' });
+      console.error('❌ Workvivo API error', err.response?.status, err.response?.data);
+      return res.status(500).json({ error: 'Failed to send reply' });
     }
   }
 
-  // otherwise just 200 OK
-  res.status(200).json({ success: true });
+  // catch-all
+  return res.sendStatus(200);
+});
+
+//
+// Health-check
+//
+app.get('/', (req, res) => {
+  res.status(200).send('Workvivo chatbot webhook is running.');
 });
 
 app.listen(PORT, () => {
-  console.log(`🤖 Workvivo bot listening on port ${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
