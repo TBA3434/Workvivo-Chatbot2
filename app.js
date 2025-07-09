@@ -1,132 +1,101 @@
-/////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Workvivo Chatbot + FAQ Webhook Server
-// Adapted from Yosuke Sawamura sample demo
-//
-// node v20+, npm 11+
-//
-/////////////////////////////////////////////////////////////////////////////////////////////////
+const path        = require('path');
+const express     = require('express');
+const jwt         = require('jsonwebtoken');
+const jwksClient  = require('jwks-rsa');
+const axios       = require('axios');
+const Database    = require('better-sqlite3');
 
-// import modules
-const fs = require('fs');
-const path = require('path');
-const express = require('express');
-const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
-const axios = require('axios');
-const sqlite3 = require('sqlite3').verbose();
+// load .env
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-// Create Express app
-const app = express();
-app.use(express.json()); // parse JSON bodies
-
-// Environment variables
-const PORT = process.env.PORT || 10000;
+// env vars
+const PORT             = process.env.PORT           || 10000;
 const WORKVIVO_API_URL = process.env.WORKVIVO_API_URL;
-const WORKVIVO_ID       = process.env.WORKVIVO_ID;
-const WORKVIVO_TOKEN    = process.env.WORKVIVO_TOKEN;
-const QA_DB_PATH        = process.env.QA_DB_PATH || path.join(__dirname, 'db', 'faq.db');
+const WORKVIVO_ID      = process.env.WORKVIVO_ID;
+const WORKVIVO_TOKEN   = process.env.WORKVIVO_TOKEN;
+const QA_DB_PATH       = process.env.QA_DB_PATH     || path.join(__dirname, 'db', 'faq.db');
 
-// Open SQLite database (read-only)
-const db = new sqlite3.Database(QA_DB_PATH, sqlite3.OPEN_READONLY, err => {
-  if (err) console.error('Failed to open FAQ DB:', err);
-  else console.log('Connected to FAQ DB at', QA_DB_PATH);
-});
+// open your QA database
+const db = new Database(QA_DB_PATH, { readonly: true });
 
-// Utility: verify Workvivo JWT header
+const app = express();
+app.use(express.json());
+
+// verify the incoming Workvivo webhook JWT
 async function verifyWorkvivoRequest(token) {
   const decoded = jwt.decode(token, { complete: true });
+  if (!decoded) throw new Error('Invalid token format');
   const { kid } = decoded.header;
   const { publicKeyUrl } = decoded.payload;
   const client = jwksClient({ jwksUri: publicKeyUrl });
-  const key = await client.getSigningKey(kid);
-  const signingKey = key.getPublicKey();
-  return jwt.verify(token, signingKey);
+  const key    = await client.getSigningKey(kid);
+  const pubKey = key.getPublicKey();
+  return jwt.verify(token, pubKey);
 }
 
-// Webhook handler
-async function handleWebhook(req, res) {
-  console.log('/webhook called');
-  console.log('Headers:', req.headers);
-  console.log('Body:', JSON.stringify(req.body));
+app.post('/webhook', async (req, res) => {
+  console.log('🚨 /webhook called', req.headers, req.body);
 
-  const payload = req.body;
   const token = req.headers['x-workvivo-jwt'];
+  if (!token) return res.status(401).json({ error: 'Missing Workvivo JWT' });
 
-  // Only handle chat bot message events
-  if (payload.action !== 'chat_bot_message_sent') {
-    return res.status(200).json({ success: true });
-  }
-
-  // Verify signature
-  if (!token) {
-    return res.status(401).json({ error: 'Missing Workvivo JWT' });
-  }
   try {
     await verifyWorkvivoRequest(token);
-  } catch (err) {
-    console.error('JWT verification failed:', err);
+  } catch (e) {
+    console.error('❌ JWT verification failed', e);
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
-  // Extract message details
-  const msg = payload.message;
-  const userQuestion = msg.message;        // user's text
-  const botUserId    = msg.bot_userid;     // bot ID
-  const channelUrl   = msg.channel_url;    // channel to reply
+  const { action, category, bot, channel, message } = req.body;
 
-  // Lookup answer in SQLite DB (exact match for now)
-  db.get(
-    'SELECT answer FROM faq WHERE question = ?',
-    [userQuestion],
-    (err, row) => {
-      if (err) {
-        console.error('DB lookup error:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
+  // only respond to user messages
+  if (action === 'chat_bot_message_sent' && category === 'bot_message_notification') {
+    const userText = (message.text || '').trim().toLowerCase();
 
-      const answer = row ? row.answer :
-        'Sorry, I don\'t have an answer for that right now.';
+    // simple LIKE match against your sqlite FAQ table
+    const stmt = db.prepare(`
+      SELECT answer
+      FROM faq
+      WHERE lower(question) LIKE ?
+      LIMIT 1
+    `);
+    const row = stmt.get(`%${userText}%`);
+    const answer = row
+      ? row.answer
+      : "Sorry, I don't have an answer for that yet.";
 
-      // Build reply payload
-      const replyPayload = {
-        bot_userid: botUserId,
-        channel_url: channelUrl,
-        type: 'message',
-        message: answer
-      };
+    // build your reply payload (message must be a string)
+    const payload = {
+      bot_userid:  bot.bot_userid,
+      channel_url: channel.channel_url,
+      type:       'message',
+      message:    answer
+    };
 
-      // Send reply back to Workvivo
-      axios({
-        method: 'post',
-        url: WORKVIVO_API_URL,
-        headers: {
-          'Workvivo-Id': WORKVIVO_ID,
-          'Authorization': `Bearer ${WORKVIVO_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        data: replyPayload
-      })
-      .then(apiRes => {
-        console.log('Replied:', apiRes.data);
-        res.status(200).json({ success: true });
-      })
-      .catch(apiErr => {
-        console.error('Workvivo API error:', apiErr.response?.data || apiErr);
-        res.status(500).json({ error: 'Failed to send response' });
-      });
+    try {
+      const resp = await axios.post(
+        WORKVIVO_API_URL,
+        payload,
+        {
+          headers: {
+            'Workvivo-Id': WORKVIVO_ID,
+            'Authorization': `Bearer ${WORKVIVO_TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      console.log('✅ Workvivo reply sent', resp.data);
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('❌ Workvivo API error', err.response?.data || err);
+      return res.status(500).json({ error: 'Failed to post reply' });
     }
-  );
-}
+  }
 
-// Routes
-app.post('/webhook', handleWebhook);
-app.get('/', (req, res) => {
-  res.status(200).send('Workvivo Chatbot Webhook is running.');
+  // otherwise just 200 OK
+  res.status(200).json({ success: true });
 });
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`Webhook server listening on port ${PORT}`);
+  console.log(`🤖 Workvivo bot listening on port ${PORT}`);
 });
