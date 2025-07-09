@@ -1,60 +1,49 @@
 // app.js
 require('dotenv').config();
 
-const express = require('express');
-const bodyParser = require('body-parser');
-const path = require('path');
-const fs = require('fs');
-const fsPromises = require('fs/promises');
-const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
-const axios = require('axios');
-const Database = require('better-sqlite3');
+const express     = require('express');
+const bodyParser  = require('body-parser');
+const path        = require('path');
+const fs          = require('fs');
+const fsPromises  = require('fs/promises');
+const axios       = require('axios');
+const Database    = require('better-sqlite3');
+const jwt         = require('jsonwebtoken');
+const jwksClient  = require('jwks-rsa');
 
-const app = express();
-const port = process.env.PORT || 10000;
+const app     = express();
+const port    = process.env.PORT || 10000;
 const logFile = path.join(__dirname, 'log', 'webhook.log');
 
-// ensure logging folder exists
+// ensure log folder
 if (!fs.existsSync(path.dirname(logFile))) {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
 }
 
-// parse JSON bodies
+// parse JSON
 app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// ———————————
-// DATABASE SETUP
-// ———————————
+// init DB
 let db;
 try {
-  const dbPath = path.join(__dirname, 'db', 'faq.db');
-  console.log('📁 DB path:', dbPath);
-  db = new Database(dbPath);
-  console.log('✅ Connected to SQLite DB');
+  db = new Database(path.join(__dirname, 'db', 'faq.db'));
+  console.log('✅ SQLite connected');
 } catch (err) {
-  console.error('❌ Failed to connect to DB:', err.message);
+  console.error('❌ DB error:', err);
   process.exit(1);
 }
 
-// ———————————
-// JWT VERIFICATION (unused for dummy-token)
-// ———————————
-async function verifyWorkvivoRequest(token) {
+// (Optional) JWT verify stub
+async function verifyJWT(token) {
+  if (token === 'dummy-token') return;
   const decoded = jwt.decode(token, { complete: true });
-  const { kid } = decoded.header;
-  const publicKeyUrl = decoded.payload.publicKeyUrl;
-  const client = jwksClient({ jwksUri: publicKeyUrl });
-  const key = await client.getSigningKey(kid);
-  const signingKey = key.getPublicKey();
-  return jwt.verify(token, signingKey);
+  const client  = jwksClient({ jwksUri: decoded.payload.publicKeyUrl });
+  const key     = await client.getSigningKey(decoded.header.kid);
+  const pubKey  = key.getPublicKey();
+  jwt.verify(token, pubKey);
 }
 
-// ———————————
-// WEBHOOK ENDPOINT
-// ———————————
 app.post('/webhook', async (req, res) => {
   console.log('🚨  /webhook called');
   console.log('Headers:', req.headers);
@@ -62,56 +51,41 @@ app.post('/webhook', async (req, res) => {
   await fsPromises.appendFile(logFile, JSON.stringify(req.body) + '\n');
 
   const token = req.headers['x-workvivo-jwt'];
-  if (!token) {
-    return res.status(401).json({ error: 'Missing JWT' });
-  }
-  if (token !== 'dummy-token') {
-    try {
-      await verifyWorkvivoRequest(token);
-      console.log('✅ JWT verified');
-    } catch (err) {
-      console.error('❌ JWT verification failed:', err.message);
-      return res.status(401).json({ error: 'Invalid JWT' });
-    }
-  } else {
-    console.log('⚠️  Skipping JWT verify for dummy-token');
+  if (!token) return res.status(401).json({ error: 'Missing JWT' });
+  try {
+    await verifyJWT(token);
+  } catch (err) {
+    console.error('❌ JWT verify failed', err.message);
+    return res.status(401).json({ error: 'Invalid JWT' });
   }
 
-  const { action, category, message, bot, channel } = req.body;
+  const { action, category, bot, channel, message } = req.body;
   if (action !== 'chat_bot_message_sent' || category !== 'bot_message_notification') {
-    return res.status(200).json({ message: 'Ignored non-message event.' });
+    return res.status(200).json({ message: 'Ignored event' });
   }
 
-  const userText = message?.text?.trim().toLowerCase();
-  if (!userText) {
-    return res.status(400).json({ error: 'No message text.' });
-  }
+  const text = (message.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'No message text' });
 
   // lookup FAQ
-  let answer = "Sorry, I don't know how to respond to that.";
-  try {
-    const row = db
-      .prepare('SELECT answer FROM faqs WHERE LOWER(question)=LOWER(?)')
-      .get(userText);
-    if (row) answer = row.answer;
-  } catch (err) {
-    console.error('❌ DB error:', err.message);
-  }
+  let answer = "Sorry, I don't know that one.";
+  const row = db.prepare('SELECT answer FROM faqs WHERE LOWER(question)=LOWER(?)')
+                .get(text);
+  if (row) answer = row.answer;
 
-  // build the correct payload: message must be a string
-  const reply = {
+  // build reply (message must be a string, no \n)
+  const payload = {
     bot_userid:  bot.bot_userid,
     channel_url: channel.channel_url,
     type:        'message',
-    message:     answer
+    message:     answer.trim()
   };
-  console.log('🟡 Reply payload:', reply);
+  console.log('🟡 Reply payload:', payload);
 
-  // send it back via Workvivo REST API
   try {
     const resp = await axios.post(
       process.env.WORKVIVO_API_URL,
-      reply,
+      payload,
       {
         headers: {
           'Authorization': `Bearer ${process.env.WORKVIVO_TOKEN}`,
@@ -120,22 +94,15 @@ app.post('/webhook', async (req, res) => {
         }
       }
     );
-    console.log('✅ Sent to Workvivo:', resp.data);
+    console.log('✅ Workvivo response:', resp.data);
     return res.sendStatus(200);
   } catch (err) {
-    console.error(
-      '❌ Workvivo API error:',
-      err.response?.status,
-      err.response?.data
-    );
-    return res.status(500).json({ error: 'Failed to send response' });
+    console.error('❌ Workvivo API error:',
+      err.response?.status, err.response?.data);
+    return res.status(500).json({ error: 'Failed to send' });
   }
 });
 
-// health check
-app.get('/', (req, res) => res.send('Chatbot is running.'));
+app.get('/', (req, res) => res.send('OK')); 
 
-// start
-app.listen(port, () => {
-  console.log(`✅ Server listening on port ${port}`);
-});
+app.listen(port, () => console.log(`🚀 Listening on ${port}`));
