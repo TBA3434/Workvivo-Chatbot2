@@ -1,149 +1,131 @@
-// app.js
 require('dotenv').config();
-
-const express = require('express');
-const bodyParser = require('body-parser');
-const path = require('path');
-const fs = require('fs');
-const fsPromises = require('fs/promises');
-const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
-const axios = require('axios');
-const Database = require('better-sqlite3');
+const express       = require('express');
+const bodyParser    = require('body-parser');
+const path          = require('path');
+const fs            = require('fs');
+const fsPromises    = require('fs/promises');
+const jwt           = require('jsonwebtoken');
+const jwksClient    = require('jwks-rsa');
+const axios         = require('axios');
+const Database      = require('better-sqlite3');
 
 const app = express();
 const port = process.env.PORT || 10000;
 const logFile = path.join(__dirname, 'log', 'webhook.log');
 
-// ensure log directory exists
+//— Make sure our log folder exists
 if (!fs.existsSync(path.dirname(logFile))) {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
 }
 
-console.log('🟡 Starting chatbot server...');
-
-// ———————————
-// MIDDLEWARE
-// ———————————
+//— Parse JSON bodies
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// ———————————
-// DATABASE SETUP
-// ———————————
+//— SQLite
 let db;
 try {
   const dbPath = path.join(__dirname, 'db', 'faq.db');
-  console.log('📁 DB path:', dbPath);
   db = new Database(dbPath);
-  console.log('✅ Connected to SQLite DB');
+  console.log('✅ Connected to SQLite DB at', dbPath);
 } catch (err) {
-  console.error('❌ Failed to connect to DB:', err.message);
+  console.error('❌ DB connection failed:', err.message);
   process.exit(1);
 }
 
-// ———————————
-// JWT VERIFICATION
-// ———————————
+//— Your Workvivo creds from .env
+const WORKVIVO_API_URL = process.env.WORKVIVO_API_URL;   // e.g. https://api.workvivo.io/v1/chat/bots/message
+const WORKVIVO_TOKEN   = process.env.WORKVIVO_TOKEN;     // e.g. 396|abc...
+const WORKVIVO_ID      = process.env.WORKVIVO_ID;        // e.g. 3399
+
+//— (Optional) your JWT-verification stub
 async function verifyWorkvivoRequest(token) {
   const decoded = jwt.decode(token, { complete: true });
   const { kid } = decoded.header;
   const publicKeyUrl = decoded.payload.publicKeyUrl;
-
   const client = jwksClient({ jwksUri: publicKeyUrl });
   const key = await client.getSigningKey(kid);
-  const signingKey = key.getPublicKey();
-  return jwt.verify(token, signingKey);
+  return jwt.verify(token, key.getPublicKey());
 }
 
-// ———————————
-// WEBHOOK HANDLER
-// ———————————
+//— Webhook endpoint
 app.post('/webhook', async (req, res) => {
-  console.log('🚨 /webhook called');
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Body   :', JSON.stringify(req.body, null, 2));
-  await fsPromises.appendFile(logFile, JSON.stringify(req.body, null, 2) + '\n');
+  console.log('🚨  /webhook called');
+  console.log('Headers:', req.headers);
+  console.log('Body   :', req.body);
+  await fsPromises.appendFile(logFile, JSON.stringify(req.body) + '\n');
 
-  // JWT check
+  // JWT
   const token = req.headers['x-workvivo-jwt'];
-  if (!token) {
-    console.error('❌ Missing JWT');
-    return res.status(401).json({ error: 'Missing JWT' });
-  }
-  if (token === 'dummy-token') {
-    console.log('⚠️  Skipping JWT verify for dummy-token');
-  } else {
+  if (!token) return res.status(401).json({ error: 'Missing JWT' });
+  if (token !== 'dummy-token') {
     try {
       await verifyWorkvivoRequest(token);
-      console.log('✅ JWT verified');
     } catch (err) {
-      console.error('❌ JWT verification failed:', err.message);
+      console.error('❌ JWT failed:', err.message);
       return res.status(401).json({ error: 'Invalid JWT' });
     }
+  } else {
+    console.log('⚠️  Skipping JWT verify for dummy-token');
   }
 
-  // Payload validation
+  // Only handle chat_bot_message_sent
   const { action, category, message, bot, channel } = req.body;
   if (action !== 'chat_bot_message_sent' || category !== 'bot_message_notification') {
-    return res.status(200).json({ message: 'Non-message action received.' });
+    return res.status(200).json({ message: 'Ignored' });
   }
-  const userText = message?.text?.toLowerCase();
-  if (!userText) {
-    return res.status(400).json({ error: 'Message text missing' });
-  }
+
+  const userText = message?.text?.trim().toLowerCase();
+  if (!userText) return res.status(400).json({ error: 'No message text' });
 
   // DB lookup
   let answer = "Sorry, I don't know how to respond to that.";
   try {
-    const row = db
-      .prepare("SELECT answer FROM faqs WHERE LOWER(question) = LOWER(?)")
-      .get(userText);
+    const row = db.prepare(
+      "SELECT answer FROM faqs WHERE LOWER(question)=LOWER(?)"
+    ).get(userText);
     if (row) answer = row.answer;
   } catch (err) {
-    console.error('❌ DB error:', err.message);
+    console.error('❌ DB error:', err);
   }
 
-  // Build response payload
-  const responsePayload = {
-    bot_userid: bot.bot_userid,
+  const payload = {
+    bot_userid:  bot.bot_userid,
     channel_url: channel.channel_url,
-    type: 'message',
-    message: answer
+    type:        'message',
+    message:     answer
   };
 
-  // Send response back to Workvivo
+  // POST back to Workvivo
   try {
-    const sendResp = await axios.post(
-      process.env.WORKVIVO_API_URL,
-      responsePayload,
+    const resp = await axios.post(
+      WORKVIVO_API_URL,
+      payload,
       {
         headers: {
-          Authorization: `Bearer ${process.env.WORKVIVO_TOKEN}`,
-          'Workvivo-Id': process.env.WORKVIVO_ID,
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${WORKVIVO_TOKEN}`,
+          'Workvivo-Id':   WORKVIVO_ID,
+          'Content-Type':  'application/json'
         }
       }
     );
-    console.log('✅ Message sent to Workvivo:', sendResp.data);
+    console.log('✅ Workvivo replied with', resp.data);
     return res.status(200).json({ success: true });
   } catch (err) {
-    console.error('❌ Failed to send message to Workvivo:', err.message);
+    // log full response for debugging
+    console.error(
+      '❌ Workvivo API error:',
+      err.response?.status,
+      err.response?.data || err.message
+    );
     return res.status(500).json({ error: 'Failed to send response' });
   }
 });
 
-// ———————————
-// HEALTH CHECK
-// ———————————
-app.get('/', (req, res) => {
-  res.send('Chatbot is running.');
-});
+//— Healthcheck
+app.get('/', (req, res) => res.send('Chatbot is running.'));
 
-// ———————————
-// START SERVER
-// ———————————
 app.listen(port, () => {
-  console.log(`✅ Server listening on port ${port}`);
+  console.log(`✅ Listening on port ${port}`);
 });
